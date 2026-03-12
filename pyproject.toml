@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ticktick-cli"
+version = "0.1.0"
+description = "CLI tool for TickTick task management"
+requires-python = ">=3.9"
+dependencies = [
+    "ticktick-py",
+    "click>=8.0",
+]
+
+[project.scripts]
+tt = "ticktick_cli.cli:cli"
+
+[tool.setuptools.packages.find]
+include = ["ticktick_cli*"]
