@@ -1,7 +1,8 @@
 from datetime import date
 import unittest
+from unittest.mock import patch
 
-from ticktick_cli.commands.tasks import _filter_due_tasks
+from ticktick_cli.commands.tasks import _collect_due_tasks_for_status, _due_query_window, _filter_due_tasks, _merge_by_id
 
 
 TASKS = [
@@ -48,6 +49,46 @@ class TestDueFiltering(unittest.TestCase):
             end_date=date(2026, 3, 16),
         )
         self.assertEqual([t["id"] for t in out], ["a", "c", "b"])
+
+    def test_due_query_window_target(self):
+        start, end = _due_query_window(target_date=date(2026, 3, 15))
+        self.assertEqual(start.isoformat(), "2026-03-15")
+        self.assertEqual(end.isoformat(), "2026-03-15")
+
+    def test_merge_by_id_prefers_second(self):
+        merged = _merge_by_id(
+            [{"id": "x", "title": "open", "status": 0}],
+            [{"id": "x", "title": "completed", "status": 2}],
+        )
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0]["title"], "completed")
+
+    @patch("ticktick_cli.commands.tasks._get_completed_tasks_from_private_api", return_value=None)
+    @patch("ticktick_cli.commands.tasks._get_all_tasks", return_value=TASKS)
+    @patch("ticktick_cli.commands.tasks._get_projects", return_value=[{"id": "p"}])
+    @patch("ticktick_cli.commands.tasks.get_open_api", return_value=object())
+    def test_collect_due_tasks_all_falls_back_to_open_when_private_unavailable(
+        self,
+        _mock_open_api,
+        _mock_projects,
+        _mock_all_tasks,
+        _mock_completed,
+    ):
+        out = _collect_due_tasks_for_status(
+            mode="strict",
+            status_filter="all",
+            target_date=date(2026, 3, 15),
+        )
+        self.assertEqual([t["id"] for t in out], ["a"])
+
+    @patch("ticktick_cli.commands.tasks._get_completed_tasks_from_private_api", return_value=None)
+    def test_collect_due_tasks_completed_returns_none_when_private_unavailable(self, _mock_completed):
+        out = _collect_due_tasks_for_status(
+            mode="strict",
+            status_filter="completed",
+            target_date=date(2026, 3, 15),
+        )
+        self.assertIsNone(out)
 
 
 if __name__ == "__main__":

@@ -88,6 +88,10 @@ tt tasks due-on --date 2026-03-15 --mode web-today --status open
 tt tasks due-range --from 2026-03-09 --to 2026-03-15
 tt tasks due-range --from 2026-03-09 --to 2026-03-15 --mode strict --status all
 tt tasks due-range --from 2026-03-09 --to 2026-03-15 --mode web-today --status open
+
+# Completed tasks by completion-date window (private backend)
+tt tasks completed --from 2026-03-15 --to 2026-03-15
+tt --json tasks completed --from 2026-03-09 --to 2026-03-15 --raw
 ```
 
 Mode semantics:
@@ -142,6 +146,8 @@ Notes:
 - In JSON mode, `--raw` appends the original TickTick payload per task.
 - `due_date` is derived from `dueDate` after converting to system local timezone.
 - Errors return `{"error": "..."}`.
+- Completed history depends on TickTick's private API backend. If unavailable, commands return
+  `{"error":"completed_history_unavailable: ..."}`.
 
 ### LLM skill usage
 

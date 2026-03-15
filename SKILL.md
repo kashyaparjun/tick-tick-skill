@@ -50,6 +50,10 @@ tt --json tasks due-on --date 2026-03-15 --mode web-today --status open
 tt --json tasks due-range --from 2026-03-09 --to 2026-03-15
 tt --json tasks due-range --from 2026-03-09 --to 2026-03-15 --mode strict --status all
 tt --json tasks due-range --from 2026-03-09 --to 2026-03-15 --mode web-today --status open
+
+# Completed tasks by completion-date window (private API backend)
+tt --json tasks completed --from 2026-03-15 --to 2026-03-15
+tt --json tasks completed --from 2026-03-09 --to 2026-03-15 --raw
 ```
 
 Due mode semantics:
@@ -124,4 +128,6 @@ Errors:
 - Priority values: `none` (0), `low` (1), `medium` (3), `high` (5).
 - Due dates use `YYYY-MM-DD` format.
 - Local date normalization is used for due filtering (`dueDate` is converted to system timezone before date comparisons).
+- Completed-task history comes from TickTick's private API backend; if unavailable, the CLI returns:
+  `{"error":"completed_history_unavailable: ..."}`
 - The TickTick Open API cannot see tasks in the default Inbox. Tasks must be in a named project.
