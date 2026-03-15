@@ -6,6 +6,8 @@ from pathlib import Path
 
 import click
 
+from ticktick_cli.openapi import TickTickOpenAPI
+
 CONFIG_DIR = Path.home() / ".config" / "ticktick-cli"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 TOKEN_CACHE = CONFIG_DIR / ".token-oauth"
@@ -20,6 +22,29 @@ def load_config() -> dict:
 def save_config(config: dict):
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     CONFIG_FILE.write_text(json.dumps(config, indent=2))
+
+
+def get_open_api() -> TickTickOpenAPI:
+    """Return an authenticated TickTick Open API client.
+
+    Uses the OAuth token cached by `tt auth signin`.
+    """
+    if not TOKEN_CACHE.exists():
+        click.echo("Not authenticated. Run: tt auth signin")
+        sys.exit(1)
+
+    try:
+        token = json.loads(TOKEN_CACHE.read_text())
+    except Exception:
+        click.echo("Token cache unreadable. Run: tt auth signin", err=True)
+        sys.exit(1)
+
+    access_token = token.get("access_token")
+    if not access_token:
+        click.echo("Token cache missing access_token. Run: tt auth signin", err=True)
+        sys.exit(1)
+
+    return TickTickOpenAPI(access_token=access_token)
 
 
 def get_client():

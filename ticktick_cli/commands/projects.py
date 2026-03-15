@@ -2,7 +2,7 @@
 
 import click
 
-from ticktick_cli.config import get_client
+from ticktick_cli.config import get_open_api
 from ticktick_cli.output import (
     use_json,
     emit,
@@ -24,8 +24,12 @@ def projects():
 @click.option("-v", "--verbose", is_flag=True, help="Show project details.")
 def list_projects(verbose):
     """List all projects."""
-    client = get_client()
-    project_list = client.state.get("projects", [])
+    api = get_open_api()
+    try:
+        project_list = api.get("/project")
+    except Exception as e:
+        emit_error(str(e))
+        return
 
     if use_json():
         emit([project_to_dict(p) for p in project_list])
