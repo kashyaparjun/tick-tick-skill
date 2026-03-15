@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 import click
 
-from ticktick_cli.config import get_client
+from ticktick_cli.config import get_open_api
 from ticktick_cli.output import (
     PRIORITY_MAP,
     use_json,
@@ -27,16 +27,19 @@ def tasks():
 @click.option("--priority", type=click.Choice(["low", "medium", "high"]), help="Filter by priority.")
 def list_tasks(project, verbose, priority):
     """List all tasks."""
-    client = get_client()
+    api = get_open_api()
+    projects = _get_projects(api)
+    if projects is None:
+        return
 
     if project:
-        proj = _find_project(client, project)
+        proj = _find_project(projects, project)
         if not proj:
             emit_error(f"Project '{project}' not found.")
             return
-        task_list = client.task.get_from_project(proj["id"])
+        task_list = _get_tasks_for_project(api, proj["id"])
     else:
-        task_list = client.state.get("tasks", [])
+        task_list = _get_all_tasks(api, projects)
 
     if priority:
         pri_val = PRIORITY_MAP[priority]
@@ -63,31 +66,37 @@ def list_tasks(project, verbose, priority):
 @click.option("--all-day", is_flag=True, help="Mark as all-day task.")
 def add_task(title, project, priority, due, note, all_day):
     """Create a new task."""
-    client = get_client()
+    api = get_open_api()
+    projects = _get_projects(api)
+    if projects is None:
+        return
 
-    kwargs = {"title": title, "priority": PRIORITY_MAP[priority]}
+    payload = {"title": title, "priority": PRIORITY_MAP[priority]}
 
     if project:
-        proj = _find_project(client, project)
+        proj = _find_project(projects, project)
         if not proj:
             emit_error(f"Project '{project}' not found.")
             return
-        kwargs["projectId"] = proj["id"]
+        payload["projectId"] = proj["id"]
 
     if due:
         try:
-            due_dt = datetime.strptime(due, "%Y-%m-%d")
-            kwargs["dueDate"] = due_dt
-            kwargs["allDay"] = all_day or True
+            datetime.strptime(due, "%Y-%m-%d")
         except ValueError:
             emit_error("Invalid date format. Use YYYY-MM-DD.")
             return
+        payload["dueDate"] = _ticktick_due_datetime(due)
+        payload["isAllDay"] = True if all_day else True
 
     if note:
-        kwargs["content"] = note
+        payload["content"] = note
 
-    task = client.task.builder(**kwargs)
-    result = client.task.create(task)
+    try:
+        result = api.post("/task", json=payload)
+    except Exception as e:
+        emit_error(str(e))
+        return
 
     if use_json():
         emit(task_to_dict(result))
@@ -97,14 +106,18 @@ def add_task(title, project, priority, due, note, all_day):
 
 @tasks.command("done")
 @click.argument("task_id")
-def complete_task(task_id):
+@click.argument("project_id", required=False)
+def complete_task(task_id, project_id):
     """Mark a task as complete by ID."""
-    client = get_client()
-    task = client.get_by_id(task_id)
+    api = get_open_api()
+    task, pid = _resolve_task(api, task_id, project_id)
     if not task:
-        emit_error("Task not found.")
         return
-    client.task.complete(task)
+    try:
+        api.post(f"/project/{pid}/task/{task_id}/complete", json={})
+    except Exception as e:
+        emit_error(str(e))
+        return
 
     if use_json():
         emit({"status": "completed", "id": task_id, "title": task["title"]})
@@ -114,17 +127,21 @@ def complete_task(task_id):
 
 @tasks.command("delete")
 @click.argument("task_id")
+@click.argument("project_id", required=False)
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation.")
-def delete_task(task_id, yes):
+def delete_task(task_id, project_id, yes):
     """Delete a task by ID."""
-    client = get_client()
-    task = client.get_by_id(task_id)
+    api = get_open_api()
+    task, pid = _resolve_task(api, task_id, project_id)
     if not task:
-        emit_error("Task not found.")
         return
     if not yes and not use_json():
         click.confirm(f"Delete '{task['title']}'?", abort=True)
-    client.task.delete(task)
+    try:
+        api.delete(f"/project/{pid}/task/{task_id}")
+    except Exception as e:
+        emit_error(str(e))
+        return
 
     if use_json():
         emit({"status": "deleted", "id": task_id, "title": task["title"]})
@@ -134,33 +151,40 @@ def delete_task(task_id, yes):
 
 @tasks.command("update")
 @click.argument("task_id")
+@click.argument("project_id", required=False)
 @click.option("--title", default=None, help="New title.")
 @click.option("--priority", type=click.Choice(["none", "low", "medium", "high"]), default=None)
 @click.option("--due", default=None, help="New due date (YYYY-MM-DD).")
 @click.option("--note", default=None, help="New description/content.")
-def update_task(task_id, title, priority, due, note):
+def update_task(task_id, project_id, title, priority, due, note):
     """Update an existing task by ID."""
-    client = get_client()
-    task = client.get_by_id(task_id)
+    api = get_open_api()
+    task, pid = _resolve_task(api, task_id, project_id)
     if not task:
-        emit_error("Task not found.")
         return
 
+    payload = {"id": task_id, "projectId": pid}
+
     if title:
-        task["title"] = title
+        payload["title"] = title
     if priority:
-        task["priority"] = PRIORITY_MAP[priority]
+        payload["priority"] = PRIORITY_MAP[priority]
     if due:
         try:
-            due_dt = datetime.strptime(due, "%Y-%m-%d")
-            task["dueDate"] = client.task.dates(due_dt)["dueDate"]
+            datetime.strptime(due, "%Y-%m-%d")
         except ValueError:
             emit_error("Invalid date format. Use YYYY-MM-DD.")
             return
+        payload["dueDate"] = _ticktick_due_datetime(due)
+        payload["isAllDay"] = True
     if note:
-        task["content"] = note
+        payload["content"] = note
 
-    result = client.task.update(task)
+    try:
+        result = api.post(f"/task/{task_id}", json=payload)
+    except Exception as e:
+        emit_error(str(e))
+        return
 
     if use_json():
         emit(task_to_dict(result))
@@ -173,8 +197,11 @@ def update_task(task_id, title, priority, due, note):
 @click.option("-v", "--verbose", is_flag=True, help="Show task details.")
 def search_tasks(query, verbose):
     """Search tasks by title."""
-    client = get_client()
-    all_tasks = client.state.get("tasks", [])
+    api = get_open_api()
+    projects = _get_projects(api)
+    if projects is None:
+        return
+    all_tasks = _get_all_tasks(api, projects)
     query_lower = query.lower()
     matches = [t for t in all_tasks if query_lower in t.get("title", "").lower()]
 
@@ -195,21 +222,31 @@ def search_tasks(query, verbose):
 @click.argument("project_name")
 def move_task(task_id, project_name):
     """Move a task to a different project."""
-    client = get_client()
-    task = client.get_by_id(task_id)
-    if not task:
-        emit_error("Task not found.")
+    api = get_open_api()
+    projects = _get_projects(api)
+    if projects is None:
         return
-    proj = _find_project(client, project_name)
+
+    task, pid = _resolve_task(api, task_id, None)
+    if not task:
+        return
+
+    proj = _find_project(projects, project_name)
     if not proj:
         emit_error(f"Project '{project_name}' not found.")
         return
-    client.task.move(task, proj["id"])
+
+    payload = {"id": task_id, "projectId": proj["id"]}
+    try:
+        api.post(f"/task/{task_id}", json=payload)
+    except Exception as e:
+        emit_error(str(e))
+        return
 
     if use_json():
-        emit({"status": "moved", "id": task_id, "title": task["title"], "project": proj["name"]})
+        emit({"status": "moved", "id": task_id, "title": task.get("title"), "project": proj["name"]})
     else:
-        click.echo(f"Moved '{task['title']}' to '{proj['name']}'")
+        click.echo(f"Moved '{task.get('title')}' to '{proj['name']}'")
 
 
 @tasks.command("due")
@@ -217,8 +254,11 @@ def move_task(task_id, project_name):
 @click.option("-v", "--verbose", is_flag=True, help="Show task details.")
 def due_tasks(days, verbose):
     """Show tasks due within N days."""
-    client = get_client()
-    all_tasks = client.state.get("tasks", [])
+    api = get_open_api()
+    projects = _get_projects(api)
+    if projects is None:
+        return
+    all_tasks = _get_all_tasks(api, projects)
     now = datetime.now()
     cutoff = now + timedelta(days=days)
 
@@ -247,11 +287,69 @@ def due_tasks(days, verbose):
         click.echo(format_task(t, verbose))
 
 
-def _find_project(client, name):
+def _ticktick_due_datetime(date_yyyy_mm_dd: str) -> str:
+    # TickTick expects a datetime string; keep it simple and deterministic.
+    return f"{date_yyyy_mm_dd}T00:00:00+0000"
+
+
+def _get_projects(api):
+    try:
+        return api.get("/project")
+    except Exception as e:
+        emit_error(str(e))
+        return None
+
+
+def _get_tasks_for_project(api, project_id: str) -> list[dict]:
+    try:
+        data = api.get(f"/project/{project_id}/data")
+    except Exception:
+        # If a single project is inaccessible, treat it as empty to keep UX usable.
+        return []
+    if isinstance(data, dict):
+        return data.get("tasks", []) or []
+    return []
+
+
+def _get_all_tasks(api, projects) -> list[dict]:
+    tasks = []
+    for p in projects:
+        pid = p.get("id")
+        if not pid:
+            continue
+        tasks.extend(_get_tasks_for_project(api, pid))
+    return tasks
+
+
+def _find_project(projects, name):
     """Find a project by name (case-insensitive)."""
-    projects = client.state.get("projects", [])
     name_lower = name.lower()
     for p in projects:
         if p.get("name", "").lower() == name_lower:
             return p
     return None
+
+
+def _resolve_task(api, task_id: str, project_id: str | None):
+    """Return (task, project_id) or (None, None) with an emitted error."""
+    if project_id:
+        tasks = _get_tasks_for_project(api, project_id)
+        for t in tasks:
+            if t.get("id") == task_id:
+                return t, project_id
+        emit_error("Task not found.")
+        return None, None
+
+    projects = _get_projects(api)
+    if projects is None:
+        return None, None
+    for p in projects:
+        pid = p.get("id")
+        if not pid:
+            continue
+        for t in _get_tasks_for_project(api, pid):
+            if t.get("id") == task_id:
+                return t, pid
+
+    emit_error("Task not found.")
+    return None, None

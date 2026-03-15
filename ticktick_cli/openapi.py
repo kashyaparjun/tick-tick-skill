@@ -48,3 +48,11 @@ class TickTickOpenAPI:
         resp.raise_for_status()
         return resp.json() if resp.content else {}
 
+    def delete(self, path: str) -> Any:
+        resp = requests.delete(
+            f"{self.base_url}{path}",
+            headers=self._headers(),
+            timeout=self.timeout_s,
+        )
+        resp.raise_for_status()
+        return resp.json() if resp.content else {}

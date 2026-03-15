@@ -48,11 +48,15 @@ def list_projects(verbose):
 @click.option("--color", default=None, help="Project color (hex, e.g. #ff0000).")
 def add_project(name, color):
     """Create a new project."""
-    client = get_client()
-    kwargs = {}
+    api = get_open_api()
+    payload = {"name": name}
     if color:
-        kwargs["color"] = color
-    result = client.project.create(name, **kwargs)
+        payload["color"] = color
+    try:
+        result = api.post("/project", json=payload)
+    except Exception as e:
+        emit_error(str(e))
+        return
 
     if use_json():
         emit(project_to_dict(result))
@@ -65,14 +69,23 @@ def add_project(name, color):
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation.")
 def delete_project(name, yes):
     """Delete a project by name (also deletes its tasks)."""
-    client = get_client()
-    proj = _find_project(client, name)
+    api = get_open_api()
+    try:
+        projects = api.get("/project")
+    except Exception as e:
+        emit_error(str(e))
+        return
+    proj = _find_project(projects, name)
     if not proj:
         emit_error(f"Project '{name}' not found.")
         return
     if not yes and not use_json():
         click.confirm(f"Delete project '{proj['name']}' and all its tasks?", abort=True)
-    client.project.delete(proj["id"])
+    try:
+        api.delete(f"/project/{proj['id']}")
+    except Exception as e:
+        emit_error(str(e))
+        return
 
     if use_json():
         emit({"status": "deleted", "name": proj["name"], "id": proj["id"]})
@@ -85,13 +98,23 @@ def delete_project(name, yes):
 @click.option("-v", "--verbose", is_flag=True, help="Show task details.")
 def project_tasks(name, verbose):
     """List tasks in a project."""
-    client = get_client()
-    proj = _find_project(client, name)
+    api = get_open_api()
+    try:
+        projects = api.get("/project")
+    except Exception as e:
+        emit_error(str(e))
+        return
+    proj = _find_project(projects, name)
     if not proj:
         emit_error(f"Project '{name}' not found.")
         return
 
-    task_list = client.task.get_from_project(proj["id"])
+    try:
+        data = api.get(f"/project/{proj['id']}/data")
+    except Exception as e:
+        emit_error(str(e))
+        return
+    task_list = data.get("tasks", []) if isinstance(data, dict) else []
 
     if use_json():
         emit([task_to_dict(t) for t in task_list])
@@ -105,9 +128,8 @@ def project_tasks(name, verbose):
         click.echo(format_task(t, verbose))
 
 
-def _find_project(client, name):
+def _find_project(projects, name):
     """Find a project by name (case-insensitive)."""
-    projects = client.state.get("projects", [])
     name_lower = name.lower()
     for p in projects:
         if p.get("name", "").lower() == name_lower:
