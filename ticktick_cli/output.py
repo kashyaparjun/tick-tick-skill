@@ -5,6 +5,8 @@ import sys
 
 import click
 
+from ticktick_cli.datetime_utils import local_date_yyyy_mm_dd
+
 PRIORITY_MAP = {"none": 0, "low": 1, "medium": 3, "high": 5}
 PRIORITY_LABELS = {0: "none", 1: "low", 3: "medium", 5: "high"}
 
@@ -33,7 +35,8 @@ def task_to_dict(t: dict) -> dict:
         "title": t.get("title"),
         "status": "completed" if t.get("status") == 2 else "open",
         "priority": PRIORITY_LABELS.get(t.get("priority", 0), "none"),
-        "due_date": (t.get("dueDate") or "")[:10] or None,
+        "due_date": local_date_yyyy_mm_dd(t.get("dueDate")),
+        "due_datetime_raw": t.get("dueDate") or None,
         "project_id": t.get("projectId"),
         "content": t.get("content") or None,
         "items": [

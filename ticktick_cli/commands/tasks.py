@@ -1,31 +1,37 @@
 """Task commands for TickTick CLI."""
 
-from datetime import datetime, timedelta
+from __future__ import annotations
+
+from datetime import date, datetime, timedelta
 
 import click
 
 from ticktick_cli.config import get_open_api
+from ticktick_cli.datetime_utils import local_date_yyyy_mm_dd
 from ticktick_cli.output import (
     PRIORITY_MAP,
-    use_json,
     emit,
     emit_error,
-    task_to_dict,
     format_task,
+    task_to_dict,
+    use_json,
 )
+
+DUE_MODE_CHOICES = ["strict", "web-today"]
+STATUS_CHOICES = ["open", "completed", "all"]
 
 
 @click.group()
 def tasks():
     """Manage tasks."""
-    pass
 
 
 @tasks.command("list")
 @click.option("-p", "--project", default=None, help="Filter by project name.")
 @click.option("-v", "--verbose", is_flag=True, help="Show task details.")
 @click.option("--priority", type=click.Choice(["low", "medium", "high"]), help="Filter by priority.")
-def list_tasks(project, verbose, priority):
+@click.option("--raw", "raw_output", is_flag=True, help="(JSON only) Include raw TickTick task payload.")
+def list_tasks(project, verbose, priority, raw_output):
     """List all tasks."""
     api = get_open_api()
     projects = _get_projects(api)
@@ -45,16 +51,7 @@ def list_tasks(project, verbose, priority):
         pri_val = PRIORITY_MAP[priority]
         task_list = [t for t in task_list if t.get("priority") == pri_val]
 
-    if use_json():
-        emit([task_to_dict(t) for t in task_list])
-        return
-
-    if not task_list:
-        click.echo("No tasks found.")
-        return
-
-    for t in task_list:
-        click.echo(format_task(t, verbose))
+    _emit_tasks(task_list, raw_output=raw_output, verbose=verbose)
 
 
 @tasks.command("add")
@@ -81,21 +78,18 @@ def add_task(title, project, priority, due, note, all_day):
         payload["projectId"] = proj["id"]
 
     if due:
-        try:
-            datetime.strptime(due, "%Y-%m-%d")
-        except ValueError:
-            emit_error("Invalid date format. Use YYYY-MM-DD.")
+        if _parse_date_or_emit(due, "due") is None:
             return
         payload["dueDate"] = _ticktick_due_datetime(due)
-        payload["isAllDay"] = True if all_day else True
+        payload["isAllDay"] = bool(all_day)
 
     if note:
         payload["content"] = note
 
     try:
         result = api.post("/task", json=payload)
-    except Exception as e:
-        emit_error(str(e))
+    except Exception as exc:
+        emit_error(str(exc))
         return
 
     if use_json():
@@ -115,8 +109,8 @@ def complete_task(task_id, project_id):
         return
     try:
         api.post(f"/project/{pid}/task/{task_id}/complete", json={})
-    except Exception as e:
-        emit_error(str(e))
+    except Exception as exc:
+        emit_error(str(exc))
         return
 
     if use_json():
@@ -139,8 +133,8 @@ def delete_task(task_id, project_id, yes):
         click.confirm(f"Delete '{task['title']}'?", abort=True)
     try:
         api.delete(f"/project/{pid}/task/{task_id}")
-    except Exception as e:
-        emit_error(str(e))
+    except Exception as exc:
+        emit_error(str(exc))
         return
 
     if use_json():
@@ -170,10 +164,7 @@ def update_task(task_id, project_id, title, priority, due, note):
     if priority:
         payload["priority"] = PRIORITY_MAP[priority]
     if due:
-        try:
-            datetime.strptime(due, "%Y-%m-%d")
-        except ValueError:
-            emit_error("Invalid date format. Use YYYY-MM-DD.")
+        if _parse_date_or_emit(due, "due") is None:
             return
         payload["dueDate"] = _ticktick_due_datetime(due)
         payload["isAllDay"] = True
@@ -182,8 +173,8 @@ def update_task(task_id, project_id, title, priority, due, note):
 
     try:
         result = api.post(f"/task/{task_id}", json=payload)
-    except Exception as e:
-        emit_error(str(e))
+    except Exception as exc:
+        emit_error(str(exc))
         return
 
     if use_json():
@@ -195,7 +186,8 @@ def update_task(task_id, project_id, title, priority, due, note):
 @tasks.command("search")
 @click.argument("query")
 @click.option("-v", "--verbose", is_flag=True, help="Show task details.")
-def search_tasks(query, verbose):
+@click.option("--raw", "raw_output", is_flag=True, help="(JSON only) Include raw TickTick task payload.")
+def search_tasks(query, verbose, raw_output):
     """Search tasks by title."""
     api = get_open_api()
     projects = _get_projects(api)
@@ -205,16 +197,7 @@ def search_tasks(query, verbose):
     query_lower = query.lower()
     matches = [t for t in all_tasks if query_lower in t.get("title", "").lower()]
 
-    if use_json():
-        emit([task_to_dict(t) for t in matches])
-        return
-
-    if not matches:
-        click.echo("No matching tasks.")
-        return
-
-    for t in matches:
-        click.echo(format_task(t, verbose))
+    _emit_tasks(matches, raw_output=raw_output, verbose=verbose, empty_message="No matching tasks.")
 
 
 @tasks.command("move")
@@ -227,7 +210,7 @@ def move_task(task_id, project_name):
     if projects is None:
         return
 
-    task, pid = _resolve_task(api, task_id, None)
+    task, _pid = _resolve_task(api, task_id, None)
     if not task:
         return
 
@@ -239,8 +222,8 @@ def move_task(task_id, project_name):
     payload = {"id": task_id, "projectId": proj["id"]}
     try:
         api.post(f"/task/{task_id}", json=payload)
-    except Exception as e:
-        emit_error(str(e))
+    except Exception as exc:
+        emit_error(str(exc))
         return
 
     if use_json():
@@ -252,51 +235,207 @@ def move_task(task_id, project_name):
 @tasks.command("due")
 @click.option("--days", default=7, type=int, help="Number of days ahead (default: 7).")
 @click.option("-v", "--verbose", is_flag=True, help="Show task details.")
-def due_tasks(days, verbose):
-    """Show tasks due within N days."""
+@click.option("--raw", "raw_output", is_flag=True, help="(JSON only) Include raw TickTick task payload.")
+def due_tasks(days, verbose, raw_output):
+    """Show tasks due within N days (including overdue)."""
     api = get_open_api()
     projects = _get_projects(api)
     if projects is None:
         return
+
     all_tasks = _get_all_tasks(api, projects)
-    now = datetime.now()
-    cutoff = now + timedelta(days=days)
+    cutoff_date = datetime.now().astimezone().date() + timedelta(days=days)
+    due_list = _filter_due_tasks(
+        all_tasks,
+        mode="web-today",
+        status_filter="all",
+        target_date=cutoff_date,
+    )
 
-    due_list = []
-    for t in all_tasks:
-        due = t.get("dueDate")
-        if due:
-            try:
-                due_dt = datetime.fromisoformat(due.replace("Z", "+00:00"))
-                if due_dt.replace(tzinfo=None) <= cutoff:
-                    due_list.append(t)
-            except (ValueError, TypeError):
-                pass
+    _emit_tasks(
+        due_list,
+        raw_output=raw_output,
+        verbose=verbose,
+        empty_message=f"No tasks due in the next {days} days.",
+    )
 
-    due_list.sort(key=lambda t: t.get("dueDate", ""))
 
+@tasks.command("due-on")
+@click.option("--date", "date_str", required=True, help="Target date (YYYY-MM-DD).")
+@click.option("--mode", type=click.Choice(DUE_MODE_CHOICES), default="strict", show_default=True)
+@click.option("--status", "status_filter", type=click.Choice(STATUS_CHOICES), default="all", show_default=True)
+@click.option("-v", "--verbose", is_flag=True, help="Show task details.")
+@click.option("--raw", "raw_output", is_flag=True, help="(JSON only) Include raw TickTick task payload.")
+def due_on_tasks(date_str, mode, status_filter, verbose, raw_output):
+    """Show tasks due on a specific day.
+
+    strict mode: due_date == target day
+    web-today mode: due_date <= target day (includes overdue)
+    """
+    target_date = _parse_date_or_emit(date_str, "date")
+    if target_date is None:
+        return
+
+    api = get_open_api()
+    projects = _get_projects(api)
+    if projects is None:
+        return
+
+    all_tasks = _get_all_tasks(api, projects)
+    due_list = _filter_due_tasks(
+        all_tasks,
+        mode=mode,
+        status_filter=status_filter,
+        target_date=target_date,
+    )
+
+    _emit_tasks(
+        due_list,
+        raw_output=raw_output,
+        verbose=verbose,
+        empty_message=f"No tasks due for {target_date.isoformat()}.",
+    )
+
+
+@tasks.command("due-range")
+@click.option("--from", "from_str", required=True, help="Start date (YYYY-MM-DD).")
+@click.option("--to", "to_str", required=True, help="End date (YYYY-MM-DD).")
+@click.option("--mode", type=click.Choice(DUE_MODE_CHOICES), default="strict", show_default=True)
+@click.option("--status", "status_filter", type=click.Choice(STATUS_CHOICES), default="all", show_default=True)
+@click.option("-v", "--verbose", is_flag=True, help="Show task details.")
+@click.option("--raw", "raw_output", is_flag=True, help="(JSON only) Include raw TickTick task payload.")
+def due_range_tasks(from_str, to_str, mode, status_filter, verbose, raw_output):
+    """Show tasks due in a date range.
+
+    strict mode: from <= due_date <= to
+    web-today mode: due_date <= to (from is ignored)
+    """
+    start_date = _parse_date_or_emit(from_str, "from")
+    if start_date is None:
+        return
+    end_date = _parse_date_or_emit(to_str, "to")
+    if end_date is None:
+        return
+    if start_date > end_date:
+        emit_error("Invalid range: --from must be on or before --to.")
+        return
+
+    api = get_open_api()
+    projects = _get_projects(api)
+    if projects is None:
+        return
+
+    all_tasks = _get_all_tasks(api, projects)
+    due_list = _filter_due_tasks(
+        all_tasks,
+        mode=mode,
+        status_filter=status_filter,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    _emit_tasks(
+        due_list,
+        raw_output=raw_output,
+        verbose=verbose,
+        empty_message=f"No tasks due for {start_date.isoformat()} to {end_date.isoformat()}.",
+    )
+
+
+def _emit_tasks(task_list, raw_output: bool, verbose: bool, empty_message: str = "No tasks found."):
     if use_json():
-        emit([task_to_dict(t) for t in due_list])
+        if raw_output:
+            emit([dict(task_to_dict(task), raw=task) for task in task_list])
+        else:
+            emit([task_to_dict(task) for task in task_list])
         return
 
-    if not due_list:
-        click.echo(f"No tasks due in the next {days} days.")
+    if not task_list:
+        click.echo(empty_message)
         return
 
-    for t in due_list:
-        click.echo(format_task(t, verbose))
+    for task in task_list:
+        click.echo(format_task(task, verbose))
+
+
+def _parse_date_or_emit(value: str, label: str) -> date | None:
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        emit_error(f"Invalid {label} format. Use YYYY-MM-DD.")
+        return None
+
+
+def _task_status_label(task: dict) -> str:
+    return "completed" if task.get("status") == 2 else "open"
+
+
+def _status_matches(task: dict, status_filter: str) -> bool:
+    if status_filter == "all":
+        return True
+    return _task_status_label(task) == status_filter
+
+
+def _sort_key(task: dict) -> tuple[str, str, str]:
+    local_due = local_date_yyyy_mm_dd(task.get("dueDate")) or "9999-99-99"
+    return (local_due, task.get("dueDate", ""), task.get("title", ""))
+
+
+def _filter_due_tasks(
+    tasks: list[dict],
+    *,
+    mode: str,
+    status_filter: str,
+    target_date: date | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> list[dict]:
+    if mode not in DUE_MODE_CHOICES:
+        raise ValueError(f"Invalid due mode: {mode}")
+    if status_filter not in STATUS_CHOICES:
+        raise ValueError(f"Invalid status filter: {status_filter}")
+
+    target_iso = target_date.isoformat() if target_date else None
+    start_iso = start_date.isoformat() if start_date else None
+    end_iso = end_date.isoformat() if end_date else None
+
+    filtered = []
+    for task in tasks:
+        due_iso = local_date_yyyy_mm_dd(task.get("dueDate"))
+        if not due_iso:
+            continue
+        if not _status_matches(task, status_filter):
+            continue
+
+        if target_iso:
+            if mode == "strict":
+                include = due_iso == target_iso
+            else:
+                include = due_iso <= target_iso
+        elif start_iso and end_iso:
+            if mode == "strict":
+                include = start_iso <= due_iso <= end_iso
+            else:
+                include = due_iso <= end_iso
+        else:
+            raise ValueError("Either target_date or both start_date and end_date are required.")
+
+        if include:
+            filtered.append(task)
+
+    return sorted(filtered, key=_sort_key)
 
 
 def _ticktick_due_datetime(date_yyyy_mm_dd: str) -> str:
     # TickTick expects a datetime string; keep it simple and deterministic.
-    return f"{date_yyyy_mm_dd}T00:00:00+0000"
+    return f"{date_yyyy_mm_dd}T00:00:00+00:00"
 
 
 def _get_projects(api):
     try:
         return api.get("/project")
-    except Exception as e:
-        emit_error(str(e))
+    except Exception as exc:
+        emit_error(str(exc))
         return None
 
 
@@ -313,8 +452,8 @@ def _get_tasks_for_project(api, project_id: str) -> list[dict]:
 
 def _get_all_tasks(api, projects) -> list[dict]:
     tasks = []
-    for p in projects:
-        pid = p.get("id")
+    for project in projects:
+        pid = project.get("id")
         if not pid:
             continue
         tasks.extend(_get_tasks_for_project(api, pid))
@@ -324,9 +463,9 @@ def _get_all_tasks(api, projects) -> list[dict]:
 def _find_project(projects, name):
     """Find a project by name (case-insensitive)."""
     name_lower = name.lower()
-    for p in projects:
-        if p.get("name", "").lower() == name_lower:
-            return p
+    for project in projects:
+        if project.get("name", "").lower() == name_lower:
+            return project
     return None
 
 
@@ -334,22 +473,22 @@ def _resolve_task(api, task_id: str, project_id: str | None):
     """Return (task, project_id) or (None, None) with an emitted error."""
     if project_id:
         tasks = _get_tasks_for_project(api, project_id)
-        for t in tasks:
-            if t.get("id") == task_id:
-                return t, project_id
+        for task in tasks:
+            if task.get("id") == task_id:
+                return task, project_id
         emit_error("Task not found.")
         return None, None
 
     projects = _get_projects(api)
     if projects is None:
         return None, None
-    for p in projects:
-        pid = p.get("id")
+    for project in projects:
+        pid = project.get("id")
         if not pid:
             continue
-        for t in _get_tasks_for_project(api, pid):
-            if t.get("id") == task_id:
-                return t, pid
+        for task in _get_tasks_for_project(api, pid):
+            if task.get("id") == task_id:
+                return task, pid
 
     emit_error("Task not found.")
     return None, None

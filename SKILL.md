@@ -16,6 +16,7 @@ Manage TickTick tasks and projects via the `tt` command. Always use `--json` for
 tt --json tasks list
 tt --json tasks list -p "PROJECT_NAME"
 tt --json tasks list --priority high  # low | medium | high
+tt --json tasks list --raw            # include raw TickTick payloads
 
 # Create a task
 tt --json tasks add "TITLE"
@@ -33,11 +34,32 @@ tt --json tasks delete TASK_ID PROJECT_ID -y
 
 # Search tasks by title
 tt --json tasks search "QUERY"
+tt --json tasks search "QUERY" --raw
 
-# Tasks due within N days (default 7)
+# Tasks due within N days (includes overdue, default 7)
 tt --json tasks due
 tt --json tasks due --days 3
+tt --json tasks due --days 3 --raw
+
+# Tasks due on a specific day
+tt --json tasks due-on --date 2026-03-15
+tt --json tasks due-on --date 2026-03-15 --mode strict --status all
+tt --json tasks due-on --date 2026-03-15 --mode web-today --status open
+
+# Tasks due in a date range
+tt --json tasks due-range --from 2026-03-09 --to 2026-03-15
+tt --json tasks due-range --from 2026-03-09 --to 2026-03-15 --mode strict --status all
+tt --json tasks due-range --from 2026-03-09 --to 2026-03-15 --mode web-today --status open
 ```
+
+Due mode semantics:
+- `strict`: exact due date matching
+- `web-today`: include overdue (`<= target day`); for `due-range`, this is `<= --to` (the lower bound is ignored)
+
+Status filter values:
+- `open`
+- `completed`
+- `all` (default)
 
 ### Projects
 
@@ -67,9 +89,17 @@ Task object:
   "status": "open | completed",
   "priority": "none | low | medium | high",
   "due_date": "YYYY-MM-DD | null",
+  "due_datetime_raw": "ISO-8601 string | null",
   "project_id": "string",
   "content": "string | null",
   "items": [{"title": "string", "done": true}]
+}
+```
+
+When `--raw` is used (JSON mode only), each task object also includes:
+```json
+{
+  "raw": {"...": "Original TickTick task payload"}
 }
 ```
 
@@ -93,4 +123,5 @@ Errors:
 - Task operations like `done`, `update`, and `delete` require both `TASK_ID` and `PROJECT_ID`. Get these from `tt --json tasks list`.
 - Priority values: `none` (0), `low` (1), `medium` (3), `high` (5).
 - Due dates use `YYYY-MM-DD` format.
+- Local date normalization is used for due filtering (`dueDate` is converted to system timezone before date comparisons).
 - The TickTick Open API cannot see tasks in the default Inbox. Tasks must be in a named project.
