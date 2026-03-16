@@ -43,6 +43,9 @@ tt --json tasks update TASK_ID PROJECT_ID --priority high --due 2026-04-01
 # Delete a task (use -y to skip confirmation)
 tt --json tasks delete TASK_ID PROJECT_ID -y
 
+# Move a task to a different project
+tt --json tasks move TASK_ID PROJECT_NAME
+
 # Search tasks by title
 tt --json tasks search "QUERY"
 tt --json tasks search "QUERY" --raw
@@ -68,7 +71,7 @@ tt --json tasks completed --from 2026-03-09 --to 2026-03-15 --raw
 ```
 
 Due mode semantics:
-- `strict`: exact due date matching
+- `strict` (default): exact due date match by local date
 - `web-today`: include overdue (`<= target day`); for `due-range`, this is `<= --to` (the lower bound is ignored)
 
 Status filter values:
@@ -135,10 +138,12 @@ Errors:
 
 ## Notes
 
-- Task operations like `done`, `update`, and `delete` require both `TASK_ID` and `PROJECT_ID`. Get these from `tt --json tasks list`.
+- Task operations like `done`, `update`, `delete`, and `move` require `TASK_ID`. Get it from `tt --json tasks list`.
+- `done`, `update`, and `delete` also require `PROJECT_ID` (from the same list output).
 - Priority values: `none` (0), `low` (1), `medium` (3), `high` (5).
 - Due dates use `YYYY-MM-DD` format.
-- Local date normalization is used for due filtering (`dueDate` is converted to system timezone before date comparisons).
+- `due_date` in the output is timezone-corrected to local date — use it, not `due_datetime_raw`, for date comparisons.
+- **Always use the `tt` CLI for task operations — never the raw TickTick MCP/API tools directly.** The MCP tools require UTC ISO-8601 timestamps, which causes due dates to land on the wrong day for users outside UTC. The `tt` CLI handles timezone conversion automatically.
 - Completed-task history comes from TickTick's private API backend; if unavailable, the CLI returns:
   `{"error":"completed_history_unavailable: ..."}`
 - The TickTick Open API cannot see tasks in the default Inbox. Tasks must be in a named project.
