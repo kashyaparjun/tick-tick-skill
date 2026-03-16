@@ -2,7 +2,7 @@
 
 import click
 
-from ticktick_cli.config import get_open_api
+from ticktick_cli.api import get_api
 from ticktick_cli.output import (
     use_json,
     emit,
@@ -24,9 +24,9 @@ def projects():
 @click.option("-v", "--verbose", is_flag=True, help="Show project details.")
 def list_projects(verbose):
     """List all projects."""
-    api = get_open_api()
+    api = get_api()
     try:
-        project_list = api.get("/project")
+        project_list = api.get_projects()
     except Exception as e:
         emit_error(str(e))
         return
@@ -48,12 +48,12 @@ def list_projects(verbose):
 @click.option("--color", default=None, help="Project color (hex, e.g. #ff0000).")
 def add_project(name, color):
     """Create a new project."""
-    api = get_open_api()
-    payload = {"name": name}
+    api = get_api()
+    data = {"name": name}
     if color:
-        payload["color"] = color
+        data["color"] = color
     try:
-        result = api.post("/project", json=payload)
+        result = api.create_project(data)
     except Exception as e:
         emit_error(str(e))
         return
@@ -69,20 +69,19 @@ def add_project(name, color):
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation.")
 def delete_project(name, yes):
     """Delete a project by name (also deletes its tasks)."""
-    api = get_open_api()
+    api = get_api()
     try:
-        projects = api.get("/project")
+        proj = _find_project(api, name)
     except Exception as e:
         emit_error(str(e))
         return
-    proj = _find_project(projects, name)
     if not proj:
         emit_error(f"Project '{name}' not found.")
         return
     if not yes and not use_json():
         click.confirm(f"Delete project '{proj['name']}' and all its tasks?", abort=True)
     try:
-        api.delete(f"/project/{proj['id']}")
+        api.delete_project(proj["id"])
     except Exception as e:
         emit_error(str(e))
         return
@@ -98,19 +97,18 @@ def delete_project(name, yes):
 @click.option("-v", "--verbose", is_flag=True, help="Show task details.")
 def project_tasks(name, verbose):
     """List tasks in a project."""
-    api = get_open_api()
+    api = get_api()
     try:
-        projects = api.get("/project")
+        proj = _find_project(api, name)
     except Exception as e:
         emit_error(str(e))
         return
-    proj = _find_project(projects, name)
     if not proj:
         emit_error(f"Project '{name}' not found.")
         return
 
     try:
-        data = api.get(f"/project/{proj['id']}/data")
+        data = api.get_project_with_tasks(proj["id"])
     except Exception as e:
         emit_error(str(e))
         return
@@ -128,8 +126,9 @@ def project_tasks(name, verbose):
         click.echo(format_task(t, verbose))
 
 
-def _find_project(projects, name):
+def _find_project(api, name):
     """Find a project by name (case-insensitive)."""
+    projects = api.get_projects()
     name_lower = name.lower()
     for p in projects:
         if p.get("name", "").lower() == name_lower:

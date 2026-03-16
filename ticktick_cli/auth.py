@@ -110,11 +110,6 @@ def login():
             "Redirect URI", default=config.get("redirect_uri", "http://localhost:8080")
         )
 
-    if not config.get("username") or not config.get("password"):
-        click.echo("\nTickTick account credentials (needed for the internal API):")
-        config["username"] = click.prompt("Email", default=config.get("username", ""))
-        config["password"] = click.prompt("Password", hide_input=True)
-
     save_config(config)
 
     # Parse the redirect URI to determine local server port

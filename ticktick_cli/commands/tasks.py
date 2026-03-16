@@ -6,8 +6,8 @@ from datetime import date, datetime, time, timedelta
 
 import click
 
+from ticktick_cli.api import get_api
 from ticktick_cli.config import TOKEN_CACHE, load_config
-from ticktick_cli.config import get_open_api
 from ticktick_cli.datetime_utils import local_date_yyyy_mm_dd
 from ticktick_cli.output import (
     PRIORITY_MAP,
@@ -34,7 +34,7 @@ def tasks():
 @click.option("--raw", "raw_output", is_flag=True, help="(JSON only) Include raw TickTick task payload.")
 def list_tasks(project, verbose, priority, raw_output):
     """List all tasks."""
-    api = get_open_api()
+    api = get_api()
     projects = _get_projects(api)
     if projects is None:
         return
@@ -64,7 +64,7 @@ def list_tasks(project, verbose, priority, raw_output):
 @click.option("--all-day", is_flag=True, help="Mark as all-day task.")
 def add_task(title, project, priority, due, note, all_day):
     """Create a new task."""
-    api = get_open_api()
+    api = get_api()
     projects = _get_projects(api)
     if projects is None:
         return
@@ -88,7 +88,7 @@ def add_task(title, project, priority, due, note, all_day):
         payload["content"] = note
 
     try:
-        result = api.post("/task", json=payload)
+        result = api.create_task(payload)
     except Exception as exc:
         emit_error(str(exc))
         return
@@ -104,20 +104,20 @@ def add_task(title, project, priority, due, note, all_day):
 @click.argument("project_id", required=False)
 def complete_task(task_id, project_id):
     """Mark a task as complete by ID."""
-    api = get_open_api()
+    api = get_api()
     task, pid = _resolve_task(api, task_id, project_id)
     if not task:
         return
     try:
-        api.post(f"/project/{pid}/task/{task_id}/complete", json={})
+        api.complete_task(pid, task_id)
     except Exception as exc:
         emit_error(str(exc))
         return
 
     if use_json():
-        emit({"status": "completed", "id": task_id, "title": task["title"]})
+        emit({"status": "completed", "id": task_id, "title": task.get("title")})
     else:
-        click.echo(f"Completed: {task['title']}")
+        click.echo(f"Completed: {task.get('title')}")
 
 
 @tasks.command("delete")
@@ -126,22 +126,22 @@ def complete_task(task_id, project_id):
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation.")
 def delete_task(task_id, project_id, yes):
     """Delete a task by ID."""
-    api = get_open_api()
+    api = get_api()
     task, pid = _resolve_task(api, task_id, project_id)
     if not task:
         return
     if not yes and not use_json():
         click.confirm(f"Delete '{task['title']}'?", abort=True)
     try:
-        api.delete(f"/project/{pid}/task/{task_id}")
+        api.delete_task(pid, task_id)
     except Exception as exc:
         emit_error(str(exc))
         return
 
     if use_json():
-        emit({"status": "deleted", "id": task_id, "title": task["title"]})
+        emit({"status": "deleted", "id": task_id, "title": task.get("title")})
     else:
-        click.echo(f"Deleted: {task['title']}")
+        click.echo(f"Deleted: {task.get('title')}")
 
 
 @tasks.command("update")
@@ -153,7 +153,7 @@ def delete_task(task_id, project_id, yes):
 @click.option("--note", default=None, help="New description/content.")
 def update_task(task_id, project_id, title, priority, due, note):
     """Update an existing task by ID."""
-    api = get_open_api()
+    api = get_api()
     task, pid = _resolve_task(api, task_id, project_id)
     if not task:
         return
@@ -173,7 +173,7 @@ def update_task(task_id, project_id, title, priority, due, note):
         payload["content"] = note
 
     try:
-        result = api.post(f"/task/{task_id}", json=payload)
+        result = api.update_task(task_id, payload)
     except Exception as exc:
         emit_error(str(exc))
         return
@@ -181,7 +181,7 @@ def update_task(task_id, project_id, title, priority, due, note):
     if use_json():
         emit(task_to_dict(result))
     else:
-        click.echo(f"Updated: {result['title']}")
+        click.echo(f"Updated: {result.get('title')}")
 
 
 @tasks.command("search")
@@ -190,14 +190,13 @@ def update_task(task_id, project_id, title, priority, due, note):
 @click.option("--raw", "raw_output", is_flag=True, help="(JSON only) Include raw TickTick task payload.")
 def search_tasks(query, verbose, raw_output):
     """Search tasks by title."""
-    api = get_open_api()
+    api = get_api()
     projects = _get_projects(api)
     if projects is None:
         return
     all_tasks = _get_all_tasks(api, projects)
     query_lower = query.lower()
     matches = [t for t in all_tasks if query_lower in t.get("title", "").lower()]
-
     _emit_tasks(matches, raw_output=raw_output, verbose=verbose, empty_message="No matching tasks.")
 
 
@@ -206,7 +205,7 @@ def search_tasks(query, verbose, raw_output):
 @click.argument("project_name")
 def move_task(task_id, project_name):
     """Move a task to a different project."""
-    api = get_open_api()
+    api = get_api()
     projects = _get_projects(api)
     if projects is None:
         return
@@ -222,7 +221,7 @@ def move_task(task_id, project_name):
 
     payload = {"id": task_id, "projectId": proj["id"]}
     try:
-        api.post(f"/task/{task_id}", json=payload)
+        api.update_task(task_id, payload)
     except Exception as exc:
         emit_error(str(exc))
         return
@@ -242,7 +241,7 @@ def due_tasks(days, verbose, raw_output):
     cutoff_date = datetime.now().astimezone().date() + timedelta(days=days)
     due_list = _collect_due_tasks_for_status(
         mode="web-today",
-        status_filter="all",
+        status_filter="open",
         target_date=cutoff_date,
     )
     if due_list is None:
@@ -259,7 +258,7 @@ def due_tasks(days, verbose, raw_output):
 @tasks.command("due-on")
 @click.option("--date", "date_str", required=True, help="Target date (YYYY-MM-DD).")
 @click.option("--mode", type=click.Choice(DUE_MODE_CHOICES), default="strict", show_default=True)
-@click.option("--status", "status_filter", type=click.Choice(STATUS_CHOICES), default="all", show_default=True)
+@click.option("--status", "status_filter", type=click.Choice(STATUS_CHOICES), default="open", show_default=True)
 @click.option("-v", "--verbose", is_flag=True, help="Show task details.")
 @click.option("--raw", "raw_output", is_flag=True, help="(JSON only) Include raw TickTick task payload.")
 def due_on_tasks(date_str, mode, status_filter, verbose, raw_output):
@@ -292,7 +291,7 @@ def due_on_tasks(date_str, mode, status_filter, verbose, raw_output):
 @click.option("--from", "from_str", required=True, help="Start date (YYYY-MM-DD).")
 @click.option("--to", "to_str", required=True, help="End date (YYYY-MM-DD).")
 @click.option("--mode", type=click.Choice(DUE_MODE_CHOICES), default="strict", show_default=True)
-@click.option("--status", "status_filter", type=click.Choice(STATUS_CHOICES), default="all", show_default=True)
+@click.option("--status", "status_filter", type=click.Choice(STATUS_CHOICES), default="open", show_default=True)
 @click.option("-v", "--verbose", is_flag=True, help="Show task details.")
 @click.option("--raw", "raw_output", is_flag=True, help="(JSON only) Include raw TickTick task payload.")
 def due_range_tasks(from_str, to_str, mode, status_filter, verbose, raw_output):
@@ -451,7 +450,7 @@ def _collect_due_tasks_for_status(
 ) -> list[dict] | None:
     open_tasks: list[dict] = []
     if status_filter in ("open", "all"):
-        api = get_open_api()
+        api = get_api()
         projects = _get_projects(api)
         if projects is None:
             return None
@@ -465,7 +464,7 @@ def _collect_due_tasks_for_status(
             end_date=end_date,
         )
 
-    completed_tasks: list[dict] = []
+    completed: list[dict] = []
     if status_filter in ("completed", "all"):
         private_start, private_end = _due_query_window(target_date=target_date, start_date=start_date, end_date=end_date)
         completed_raw = _get_completed_tasks_from_private_api(private_start, private_end)
@@ -473,7 +472,7 @@ def _collect_due_tasks_for_status(
             if status_filter == "completed":
                 return None
         else:
-            completed_tasks = _filter_due_tasks(
+            completed = _filter_due_tasks(
                 completed_raw,
                 mode=mode,
                 status_filter="completed",
@@ -482,7 +481,7 @@ def _collect_due_tasks_for_status(
                 end_date=end_date,
             )
 
-    merged = _merge_by_id(open_tasks, completed_tasks)
+    merged = _merge_by_id(open_tasks, completed)
     return sorted(merged, key=_sort_key)
 
 
@@ -560,7 +559,7 @@ def _ticktick_due_datetime(date_yyyy_mm_dd: str) -> str:
 
 def _get_projects(api):
     try:
-        return api.get("/project")
+        return api.get_projects()
     except Exception as exc:
         emit_error(str(exc))
         return None
@@ -568,7 +567,7 @@ def _get_projects(api):
 
 def _get_tasks_for_project(api, project_id: str) -> list[dict]:
     try:
-        data = api.get(f"/project/{project_id}/data")
+        data = api.get_project_with_tasks(project_id)
     except Exception:
         # If a single project is inaccessible, treat it as empty to keep UX usable.
         return []

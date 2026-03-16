@@ -1,13 +1,17 @@
-"""Tag commands for TickTick CLI."""
+"""Tag commands for TickTick CLI.
+
+Note: The TickTick Open API v1 does not have tag endpoints.
+Tag operations are not supported at this time.
+"""
 
 import click
 
-from ticktick_cli.output import use_json, emit_error
+from ticktick_cli.output import emit_error
 
 
 @click.group()
 def tags():
-    """Manage tags."""
+    """Manage tags (not yet supported by TickTick Open API)."""
     pass
 
 
@@ -19,8 +23,7 @@ def _unsupported():
 
 
 @tags.command("list")
-@click.option("-v", "--verbose", is_flag=True, help="Show tag details.")
-def list_tags(verbose):
+def list_tags():
     """List all tags."""
     _unsupported()
 
