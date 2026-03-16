@@ -99,9 +99,9 @@ Mode semantics:
 - `web-today`: include overdue (`<= target`); for `due-range`, this means `<= --to` and ignores `--from`
 
 Status filter:
-- `open`
+- `open` (default)
 - `completed`
-- `all` (default)
+- `all`
 
 ### Projects
 

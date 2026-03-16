@@ -2,6 +2,17 @@
 
 Manage TickTick tasks and projects via the `tt` command. Always use `--json` for structured output.
 
+## Install
+
+```bash
+pipx install git+https://github.com/kashyaparjun/tick-tick-skill.git
+```
+
+One-time auth setup:
+
+1. Register an app at [TickTick Developer Portal](https://developer.ticktick.com/manage), set redirect URI to `http://localhost:8080`.
+2. Run `tt auth signin` and follow the prompts.
+
 ## Prerequisites
 
 - `tt` must be installed and on PATH
@@ -61,9 +72,9 @@ Due mode semantics:
 - `web-today`: include overdue (`<= target day`); for `due-range`, this is `<= --to` (the lower bound is ignored)
 
 Status filter values:
-- `open`
+- `open` (default)
 - `completed`
-- `all` (default)
+- `all`
 
 ### Projects
 
